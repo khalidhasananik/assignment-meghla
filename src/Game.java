@@ -1,8 +1,12 @@
 
 import java.awt.*;
 import java.awt.event.KeyEvent;
+import java.io.*;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Random;
+
+import javax.sound.midi.*;
 
 import game2D.*;
 
@@ -12,7 +16,7 @@ import game2D.*;
 // to begin the process. You should also add code to the 'init'
 // method that will initialise event handlers etc. 
 
-// Student ID: ???????
+// Student ID: Meghla
 
 @SuppressWarnings("serial")
 
@@ -21,36 +25,56 @@ public class Game extends GameCore {
     static int screenWidth = 512;
     static int screenHeight = 384;
 
-    // Game constants
-    float gravity = 0.0008f;
-    float jumpStrength = -0.32f;
-    float moveSpeed = 0.12f;
-
     // Game state flags
-    boolean moveLeft = false;
-    boolean moveRight = false;
-    boolean jumping = false;
-    boolean grounded = false;
     boolean debug = false;
 
     // Game resources
     Animation idleAnim, runAnim, jumpAnim, fallAnim;
     Animation appleAnim, collectAnim, flagAnim;
-    
-    Sprite	player = null;
-    Sprite  checkpoint = null;
-    ArrayList<Sprite> fruits = new ArrayList<Sprite>();
-    HashSet<Sprite> collectedFruits = new HashSet<Sprite>();
-    ArrayList<Tile> collidedTiles = new ArrayList<Tile>();
+    Animation enemyRunAnim;
+    Animation strawberryAnim; // power-up
 
-    TileMap tmap = new TileMap(); // Our tile map, note that we load it in init()
-    
+    Player player = null;
+    Sprite checkpoint = null;
+    ArrayList<Sprite> fruits = new ArrayList<Sprite>();
+    ArrayList<Sprite> powerups = new ArrayList<Sprite>();   // strawberry extra lives
+    ArrayList<Enemy> enemies = new ArrayList<Enemy>();
+    ArrayList<Particle> particles = new ArrayList<Particle>();
+
+    HashSet<Sprite> collectedFruits = new HashSet<Sprite>();
+    HashSet<Sprite> collectedPowerups = new HashSet<Sprite>();
+
+    TileMap tmap = new TileMap();
+
     int currentLevel = 1;
+
+    // Game state: 0=MENU, 1=PLAYING, 2=GAME_OVER, 3=WIN
+    static final int STATE_MENU = 0;
+    static final int STATE_PLAYING = 1;
+    static final int STATE_GAME_OVER = 2;
+    static final int STATE_WIN = 3;
+    int gameState = STATE_MENU;
+
+    // Player lives
+    int lives = 3;
+    boolean playerHit = false;
+    long hitTimer = 0;
+    static final long HIT_INVINCIBILITY_MS = 1500;
+
+    // Screen shake
+    int shakeTimer = 0;
+    static final int SHAKE_DURATION = 400;
+    static final int SHAKE_MAG = 5;
+    Random random = new Random();
 
     // Parallax background
     Image bgImage = null;
+    Image[] bgImages = new Image[4]; // one per level
 
-    long total; // The score will be the total time elapsed since a crash
+    // Scoring
+    long total;
+    int highScore = 0;
+    static final String SAVE_FILE = "../saves/highscore.txt";
 
     /**
      * The obligatory main method that creates
@@ -74,8 +98,12 @@ public class Game extends GameCore {
         setSize(screenWidth, screenHeight);
         setVisible(true);
 
-        // Load the parallax background image
-        bgImage = loadImage("../assets/images/Background/Blue.png");
+        // Load per-level backgrounds
+        bgImages[0] = loadImage("../assets/images/Background/Blue.png");
+        bgImages[1] = loadImage("../assets/images/Background/Blue.png");   // level 1
+        bgImages[2] = loadImage("../assets/images/Background/Green.png");  // level 2
+        bgImages[3] = loadImage("../assets/images/Background/Purple.png"); // level 3
+        bgImage = bgImages[1];
 
         // Load player animations from Pixel Adventure sprite sheets
         idleAnim = new Animation();
@@ -98,10 +126,19 @@ public class Game extends GameCore {
         collectAnim.setLoop(false);
 
         flagAnim = new Animation();
-        flagAnim.loadAnimationFromSheet("../assets/images/Items/Checkpoints/Checkpoint/Checkpoint (Flag Idle)(64x64).png", 10, 1, 100);
+        flagAnim.loadAnimationFromSheet(
+                "../assets/images/Items/Checkpoints/Checkpoint/Checkpoint (Flag Idle)(64x64).png", 10, 1, 100);
 
-        // Initialise the player with the idle animation
-        player = new Sprite(idleAnim);
+        // Enemy animation - use Pink Man as the patrol enemy
+        enemyRunAnim = new Animation();
+        enemyRunAnim.loadAnimationFromSheet("../assets/images/Main Characters/Pink Man/Run (32x32).png", 12, 1, 60);
+
+        // Strawberry power-up animation
+        strawberryAnim = new Animation();
+        strawberryAnim.loadAnimationFromSheet("../assets/images/Items/Fruits/Strawberry.png", 17, 1, 60);
+
+        // Initialise the player with the animations
+        player = new Player(idleAnim, runAnim, jumpAnim, fallAnim);
 
         // Debug: verify animation loaded
         if (player.getImage() != null)
@@ -109,23 +146,99 @@ public class Game extends GameCore {
         else
             System.out.println("WARNING: Player sprite image is NULL!");
 
+        // Load high score from disk
+        loadHighScore();
+
+        // Start background music (MIDI)
+        try {
+            Sequence sequence = MidiSystem.getSequence(new File("../assets/audio/bgm.mid"));
+            Sequencer sequencer = MidiSystem.getSequencer();
+            sequencer.open();
+            sequencer.setSequence(sequence);
+            sequencer.setLoopCount(Sequencer.LOOP_CONTINUOUSLY);
+            sequencer.start();
+        } catch (Exception e) {
+            System.err.println("Could not load background music: " + e.getMessage());
+        }
+
         loadLevel(1);
     }
-    
+
+    // ── SOUND ──────────────────────────────────────────────────────────────────
+    /** Fire and forget sound playback on its own thread. */
+    private void playSound(String path) {
+        try {
+            Sound snd = new Sound(path);
+            snd.start();
+        } catch (Exception e) {
+            // Silently ignore any missing audio; it won't crash the game.
+        }
+    }
+
+    /** Plays a sound using our custom byte-array Echo filter. */
+    private void playFilteredSound(String path) {
+        try {
+            FilteredSound fsnd = new FilteredSound(path);
+            fsnd.start();
+        } catch (Exception e) {
+            // Silently ignore
+        }
+    }
+
+    // ── HIGH SCORE ──────────────────────────────────────────────────────────────
+    private void loadHighScore() {
+        try (java.util.Scanner sc = new java.util.Scanner(new File(SAVE_FILE))) {
+            if (sc.hasNextInt())
+                highScore = sc.nextInt();
+        } catch (Exception ex) {
+            highScore = 0;
+        }
+    }
+
+    private void saveHighScore() {
+        try (java.io.PrintWriter pw = new java.io.PrintWriter(new FileWriter(SAVE_FILE))) {
+            pw.println(highScore);
+        } catch (Exception ex) { /* ignore */ }
+    }
+
+    // ── PARTICLES ─────────────────────────────────────────────────────────────
+    /** Spawn a small burst of coloured particles at the given world position. */
+    private void spawnFruitParticles(float wx, float wy, Color color) {
+        for (int i = 0; i < 8; i++) {
+            float angle = (float) (Math.PI * 2 * i / 8);
+            float speed = 0.04f + random.nextFloat() * 0.06f;
+            float vx = (float) Math.cos(angle) * speed;
+            float vy = (float) Math.sin(angle) * speed - 0.05f;
+            int life = 200 + random.nextInt(200);
+            particles.add(new Particle(wx + 8, wy + 8, vx, vy, life, color));
+        }
+    }
+
     /**
      * Loads the specified level map and resets the player and level state.
      */
-    public void loadLevel(int level)
-    {
-    	currentLevel = level;
-    	String mapFile = "map" + level + ".txt";
-    	if (!tmap.loadMap("../maps", mapFile)) {
-    		System.out.println("Could not load level " + level + ". Returning to Title or quitting.");
-    		stop();
-    		return;
-    	}
-    	System.out.println(tmap);
-    	initialiseGame();
+    public void loadLevel(int level) {
+        // Level 4 means we have beaten all levels — WIN
+        if (level > 3) {
+            if (total / 100 > highScore) {
+                highScore = (int) (total / 100);
+                saveHighScore();
+            }
+            gameState = STATE_WIN;
+            return;
+        }
+        currentLevel = level;
+        // Set background for this level
+        bgImage = bgImages[Math.min(level, bgImages.length - 1)];
+
+        String mapFile = "map" + level + ".txt";
+        if (!tmap.loadMap("../maps", mapFile)) {
+            System.out.println("Could not load level " + level + ". Returning to Title or quitting.");
+            stop();
+            return;
+        }
+        System.out.println(tmap);
+        initialiseGame();
     }
 
     /**
@@ -133,27 +246,29 @@ public class Game extends GameCore {
      * a separate method so that you can call it when restarting
      * the game when the player loses.
      */
-    public void initialiseGame()
-    {
-    	// Note: total (score) is NOT reset here so it carries across levels
-    	grounded = false;
-    	fruits.clear();
-    	collectedFruits.clear();
+    public void initialiseGame() {
+        // Note: total (score) is NOT reset here so it carries across levels
+        fruits.clear();
+        powerups.clear();
+        collectedFruits.clear();
+        collectedPowerups.clear();
+        enemies.clear();
+        particles.clear();
         checkpoint = null;
-    	      
+
         // Spawn in the open space area
         player.setPosition(100, 200);
         player.setVelocity(0, 0);
         player.show();
-        
+        playerHit = false;
+        hitTimer = 0;
+        shakeTimer = 0;
+
         // Scan the tile map for spawn markers
-        for (int r = 0; r < tmap.getMapHeight(); r++)
-        {
-            for (int c = 0; c < tmap.getMapWidth(); c++)
-            {
+        for (int r = 0; r < tmap.getMapHeight(); r++) {
+            for (int c = 0; c < tmap.getMapWidth(); c++) {
                 char ch = tmap.getTileChar(c, r);
-                if (ch == 'a')
-                {
+                if (ch == 'a') {
                     // Each fruit needs its OWN Animation to avoid shared state
                     Animation fruitAnim = new Animation();
                     fruitAnim.loadAnimationFromSheet("../assets/images/Items/Fruits/Apple.png", 17, 1, 60);
@@ -162,25 +277,142 @@ public class Game extends GameCore {
                     apple.setPosition(c * tmap.getTileWidth() - 8, r * tmap.getTileHeight() - 8);
                     fruits.add(apple);
                     tmap.setTileChar('.', c, r); // remove from map
-                }
-                else if (ch == 'F')
-                {
-                	checkpoint = new Sprite(flagAnim);
-                	// Bottom-align the 64x64 flag to the tile
-                	checkpoint.setPosition(c * tmap.getTileWidth(), r * tmap.getTileHeight() - (64 - 16));
-                	tmap.setTileChar('.', c, r);
+                } else if (ch == 's') {
+                    // Strawberry power-up — grants +1 life
+                    Animation sa = new Animation();
+                    sa.loadAnimationFromSheet("../assets/images/Items/Fruits/Strawberry.png", 17, 1, 60);
+                    Sprite berry = new Sprite(sa);
+                    berry.setPosition(c * tmap.getTileWidth() - 8, r * tmap.getTileHeight() - 8);
+                    powerups.add(berry);
+                    tmap.setTileChar('.', c, r);
+                } else if (ch == 'F') {
+                    checkpoint = new Sprite(flagAnim);
+                    // Bottom-align the 64x64 flag to the tile
+                    checkpoint.setPosition(c * tmap.getTileWidth(), r * tmap.getTileHeight() - (64 - 16));
+                    tmap.setTileChar('.', c, r);
+                } else if (ch == 'e') {
+                    // Create an enemy with its own animation instance
+                    Animation ea = new Animation();
+                    ea.loadAnimationFromSheet("../assets/images/Main Characters/Pink Man/Run (32x32).png", 12, 1, 60);
+                    float ex = c * tmap.getTileWidth();
+                    float ey = r * tmap.getTileHeight();
+                    float pMin = Math.max(0, ex - 5 * tmap.getTileWidth());
+                    float pMax = Math.min(tmap.getPixelWidth(), ex + 5 * tmap.getTileWidth());
+
+                    Enemy enemy = new Enemy(ea, ex, ey, pMin, pMax);
+                    enemies.add(enemy);
+                    tmap.setTileChar('.', c, r);
                 }
             }
         }
     }
 
+    // ── DRAW ───────────────────────────────────────────────────────────────────
     /**
      * Draw the current state of the game. Note the sample use of
      * debugging output that is drawn directly to the game screen.
      */
     public void draw(Graphics2D g) {
-        // First work out how much we need to shift the view
-        // in order to see where the player is.
+
+        // ── MENU SCREEN ──────────────────────────────────────────
+        if (gameState == STATE_MENU) {
+            g.setColor(new Color(20, 20, 40));
+            g.fillRect(0, 0, screenWidth, screenHeight);
+            drawParallaxBackground(g, 0, 0);
+
+            g.setFont(new Font("Monospaced", Font.BOLD, 42));
+            String title = "Pixel Adventure";
+            int tw = g.getFontMetrics().stringWidth(title);
+            g.setColor(Color.white);
+            g.drawString(title, (screenWidth - tw) / 2, screenHeight / 2 - 50);
+
+            g.setFont(new Font("Monospaced", Font.BOLD, 22));
+            String prompt = "Press ENTER to Start";
+            int pw = g.getFontMetrics().stringWidth(prompt);
+            g.setColor(new Color(255, 255, 100));
+            g.drawString(prompt, (screenWidth - pw) / 2, screenHeight / 2 + 10);
+
+            g.setFont(new Font("Monospaced", Font.BOLD, 14));
+            String controls = "Arrow Keys: Move   Space: Jump";
+            int cw = g.getFontMetrics().stringWidth(controls);
+            g.setColor(Color.white);
+            g.drawString(controls, (screenWidth - cw) / 2, screenHeight / 2 + 55);
+
+            // Show high score on menu
+            if (highScore > 0) {
+                g.setFont(new Font("Monospaced", Font.PLAIN, 13));
+                String hs = "Best: " + highScore;
+                int hsw = g.getFontMetrics().stringWidth(hs);
+                g.setColor(new Color(200, 200, 255));
+                g.drawString(hs, (screenWidth - hsw) / 2, screenHeight / 2 + 85);
+            }
+            return;
+        }
+
+        // ── GAME OVER SCREEN ──────────────────────────────────────
+        if (gameState == STATE_GAME_OVER) {
+            g.setColor(new Color(20, 20, 40));
+            g.fillRect(0, 0, screenWidth, screenHeight);
+
+            g.setFont(new Font("Monospaced", Font.BOLD, 48));
+            g.setColor(new Color(220, 60, 60));
+            String go = "GAME OVER";
+            int gw = g.getFontMetrics().stringWidth(go);
+            g.drawString(go, (screenWidth - gw) / 2, screenHeight / 2 - 50);
+
+            g.setFont(new Font("Monospaced", Font.PLAIN, 22));
+            g.setColor(Color.white);
+            String scoreMsg = "Score: " + (total / 100);
+            int sw = g.getFontMetrics().stringWidth(scoreMsg);
+            g.drawString(scoreMsg, (screenWidth - sw) / 2, screenHeight / 2);
+
+            g.setFont(new Font("Monospaced", Font.PLAIN, 18));
+            g.setColor(new Color(255, 255, 150));
+            String hsMsg = "Best: " + highScore;
+            int hsw = g.getFontMetrics().stringWidth(hsMsg);
+            g.drawString(hsMsg, (screenWidth - hsw) / 2, screenHeight / 2 + 30);
+
+            g.setFont(new Font("Monospaced", Font.PLAIN, 16));
+            g.setColor(new Color(180, 180, 180));
+            String restart = "Press R to Restart  |  Q to Quit";
+            int rw = g.getFontMetrics().stringWidth(restart);
+            g.drawString(restart, (screenWidth - rw) / 2, screenHeight / 2 + 65);
+            return;
+        }
+
+        // ── WIN SCREEN ────────────────────────────────────────────
+        if (gameState == STATE_WIN) {
+            g.setColor(new Color(20, 40, 20));
+            g.fillRect(0, 0, screenWidth, screenHeight);
+            drawParallaxBackground(g, 0, 0);
+
+            g.setFont(new Font("Monospaced", Font.BOLD, 48));
+            g.setColor(new Color(100, 255, 100));
+            String win = "YOU WIN!";
+            int winW = g.getFontMetrics().stringWidth(win);
+            g.drawString(win, (screenWidth - winW) / 2, screenHeight / 2 - 50);
+
+            g.setFont(new Font("Monospaced", Font.PLAIN, 22));
+            g.setColor(Color.white);
+            String scoreMsg = "Score: " + (total / 100);
+            int sw = g.getFontMetrics().stringWidth(scoreMsg);
+            g.drawString(scoreMsg, (screenWidth - sw) / 2, screenHeight / 2);
+
+            g.setFont(new Font("Monospaced", Font.PLAIN, 18));
+            g.setColor(new Color(255, 255, 150));
+            String hsMsg = "Best: " + highScore;
+            int hsw = g.getFontMetrics().stringWidth(hsMsg);
+            g.drawString(hsMsg, (screenWidth - hsw) / 2, screenHeight / 2 + 30);
+
+            g.setFont(new Font("Monospaced", Font.PLAIN, 16));
+            g.setColor(new Color(180, 255, 180));
+            String playAgain = "Press R to Play Again  |  Q to Quit";
+            int paw = g.getFontMetrics().stringWidth(playAgain);
+            g.drawString(playAgain, (screenWidth - paw) / 2, screenHeight / 2 + 65);
+            return;
+        }
+
+        // ── PLAYING ──────────────────────────────────────────────
         int xo = -(int) player.getX() + screenWidth / 4;
         int yo = -(int) player.getY() + screenHeight / 2;
 
@@ -190,56 +422,103 @@ public class Game extends GameCore {
         int maxYo = 0;
         int minYo = -(tmap.getPixelHeight() - screenHeight);
 
-        if (xo > maxXo)
-            xo = maxXo;
-        if (xo < minXo)
-            xo = minXo;
-        if (yo > maxYo)
-            yo = maxYo;
-        if (yo < minYo)
-            yo = minYo;
+        if (xo > maxXo) xo = maxXo;
+        if (xo < minXo) xo = minXo;
+        if (yo > maxYo) yo = maxYo;
+        if (yo < minYo) yo = minYo;
 
-        // Draw the parallax scrolling background
-        // The background scrolls at half the speed of the foreground
+        // ── SCREEN SHAKE ─────────────────────────────────────────
+        if (shakeTimer > 0) {
+            xo += (random.nextInt(SHAKE_MAG * 2 + 1) - SHAKE_MAG);
+            yo += (random.nextInt(SHAKE_MAG * 2 + 1) - SHAKE_MAG);
+        }
+
         drawParallaxBackground(g, xo, yo);
-
-        // Apply offsets to tile map and draw it
-        tmap.draw(g, xo, yo); 
+        tmap.draw(g, xo, yo);
 
         // Draw checkpoint
         if (checkpoint != null) {
-        	checkpoint.setOffsets(xo, yo);
-        	checkpoint.draw(g);
+            checkpoint.setOffsets(xo, yo);
+            checkpoint.draw(g);
         }
 
         // Draw fruits
         for (Sprite f : fruits) {
-        	f.setOffsets(xo, yo);
-        	f.draw(g);
+            f.setOffsets(xo, yo);
+            f.draw(g);
         }
 
-        // Apply offsets to player and draw
-        player.setOffsets(xo, yo);
-        player.draw(g);
+        // Draw power-ups (strawberries)
+        for (Sprite s : powerups) {
+            s.setOffsets(xo, yo);
+            s.draw(g);
+        }
 
-        // Debug: draw a red rectangle at player position to verify location
+        // Draw particles
+        for (Particle p : particles) {
+            p.draw(g, xo, yo);
+        }
+
+        // Draw enemies
+        for (Enemy e : enemies) {
+            e.setOffsets(xo, yo);
+            e.draw(g);
+        }
+
+        // Draw player (flash when hit)
+        boolean showPlayer = !playerHit || (hitTimer / 150) % 2 == 0;
+        if (showPlayer) {
+            player.setOffsets(xo, yo);
+            player.draw(g);
+        }
+
         if (debug) {
             g.setColor(Color.red);
             g.fillRect((int) player.getX() + xo, (int) player.getY() + yo, player.getWidth(), player.getHeight());
         }
 
-        // Show score and status information
+        // ── HUD ──────────────────────────────────────────────────
+        // Score  (white text + black drop shadow)
+        g.setFont(new Font("Monospaced", Font.BOLD, 22));
         String msg = String.format("Score: %d", total / 100);
+        g.setColor(Color.black);
+        g.drawString(msg, getWidth() - 138, 58);
         g.setColor(Color.white);
-        g.drawString(msg, getWidth() - 100, 50);
+        g.drawString(msg, getWidth() - 140, 56);
+
+        // High-score line beneath score
+        g.setFont(new Font("Monospaced", Font.PLAIN, 14));
+        String hsTxt = "Best: " + highScore;
+        g.setColor(Color.black);
+        g.drawString(hsTxt, getWidth() - 118, 78);
+        g.setColor(new Color(200, 200, 255));
+        g.drawString(hsTxt, getWidth() - 120, 76);
+
+        // Lives (hearts)
+        g.setFont(new Font("Monospaced", Font.BOLD, 22));
+        for (int i = 0; i < 3; i++) {
+            g.setColor(Color.black);
+            g.drawString("\u2665", 17 + i * 28, 58);
+            g.setColor(i < lives ? new Color(255, 50, 50) : new Color(100, 100, 100));
+            g.drawString("\u2665", 15 + i * 28, 56);
+        }
+
+        // Level indicator
+        g.setFont(new Font("Monospaced", Font.BOLD, 18));
+        String lvlMsg = "Level " + currentLevel;
+        g.setColor(Color.black);
+        g.drawString(lvlMsg, getWidth() - 138, 102);
+        g.setColor(new Color(255, 255, 150));
+        g.drawString(lvlMsg, getWidth() - 140, 100);
 
         if (debug) {
             tmap.drawBorder(g, xo, yo, Color.black);
             g.setColor(Color.red);
             player.drawBoundingBox(g);
-            g.drawString(String.format("Player: %.0f,%.0f", player.getX(), player.getY()),
-                    getWidth() - 160, 70);
-            g.drawString(String.format("Grounded: %b", grounded), getWidth() - 160, 90);
+            g.setFont(new Font("Monospaced", Font.PLAIN, 12));
+            g.setColor(Color.yellow);
+            g.drawString(String.format("Player: %.0f,%.0f", player.getX(), player.getY()), getWidth() - 160, 120);
+            g.drawString(String.format("Grounded: %b", player.isGrounded()), getWidth() - 160, 140);
             drawCollidedTiles(g, tmap, xo, yo);
         }
     }
@@ -280,24 +559,20 @@ public class Game extends GameCore {
     /**
      * Draws blue rectangles around tiles that have been collided with.
      * Used for debugging tile collision detection.
-     * 
-     * @param g       The graphics device to draw to
-     * @param map     The tile map being checked
-     * @param xOffset The x offset to apply
-     * @param yOffset The y offset to apply
      */
     public void drawCollidedTiles(Graphics2D g, TileMap map, int xOffset, int yOffset) {
-        if (collidedTiles.size() > 0) {
+        if (player != null && player.getCollidedTiles().size() > 0) {
             int tileWidth = map.getTileWidth();
             int tileHeight = map.getTileHeight();
 
             g.setColor(Color.blue);
-            for (Tile t : collidedTiles) {
+            for (Tile t : player.getCollidedTiles()) {
                 g.drawRect(t.getXC() + xOffset, t.getYC() + yOffset, tileWidth, tileHeight);
             }
         }
     }
 
+    // ── UPDATE ────────────────────────────────────────────────────────────────
     /**
      * Update any sprites and check for collisions
      * 
@@ -305,93 +580,132 @@ public class Game extends GameCore {
      *                elapsed
      */
     public void update(long elapsed) {
+        // Only run game logic when actively playing
+        if (gameState != STATE_PLAYING)
+            return;
+
         // Prevent jumps in movement if elapsed time is too large
         if (elapsed > 40)
             elapsed = 40;
 
-        // Apply gravity to the player
-        player.setVelocityY(player.getVelocityY() + (gravity * elapsed));
-
-        // Handle horizontal movement
-        if (moveLeft && !moveRight) {
-            player.setVelocityX(-moveSpeed);
-            player.setScale(-1, 1); // Flip sprite to face left
-        } else if (moveRight && !moveLeft) {
-            player.setVelocityX(moveSpeed);
-            player.setScale(1, 1); // Face right (normal)
-        } else {
-            player.setVelocityX(0);
+        // Tick down hit invincibility timer
+        if (playerHit) {
+            hitTimer += elapsed;
+            if (hitTimer >= HIT_INVINCIBILITY_MS) {
+                playerHit = false;
+                hitTimer = 0;
+            }
         }
 
-        // Handle jumping - only allow when grounded
-        if (jumping && grounded) {
-            player.setVelocityY(jumpStrength);
-            grounded = false;
+        // Tick down screen shake timer
+        if (shakeTimer > 0)
+            shakeTimer -= (int) elapsed;
+
+        // --- Player Physics ---
+        player.updatePhysics(elapsed, tmap);
+
+        // ── ENEMY PATROL ──────────────────────────────────────────
+        ArrayList<Enemy> deadEnemies = new ArrayList<Enemy>();
+        for (int i = 0; i < enemies.size(); i++) {
+            Enemy en = enemies.get(i);
+            en.updatePhysics(elapsed, tmap);
+
+            // ── PLAYER-ENEMY COLLISION ────────────────────────────
+            if (boundingBoxCollision(player, en)) {
+                float playerBottom = player.getY() + player.getHeight();
+                float enemyCentre = en.getY() + en.getHeight() / 2f;
+                // If player is falling downwards and bottom is above center of enemy
+                if (player.getVelocityY() > 0 && playerBottom < enemyCentre + 4) {
+                    // Stomped! Remove enemy and bounce player
+                    deadEnemies.add(en);
+                    total += 200;
+                    player.bounce();
+                    playSound("../assets/audio/bounce.wav");
+                } else if (!playerHit) {
+                    // Lateral hit — lose a life
+                    lives--;
+                    playerHit = true;
+                    hitTimer = 0;
+                    shakeTimer = SHAKE_DURATION; // trigger screen shake!
+                    playSound("../assets/audio/hit.wav");
+                    if (lives <= 0) {
+                        int score = (int) (total / 100);
+                        if (score > highScore) {
+                            highScore = score;
+                            saveHighScore();
+                        }
+                        gameState = STATE_GAME_OVER;
+                        return;
+                    }
+                }
+            }
+        }
+        // Remove stomped enemies outside the loop
+        for (Enemy dead : deadEnemies) {
+            enemies.remove(dead);
         }
 
-        // Choose the right animation based on state
-        if (!grounded) {
-            if (player.getVelocityY() < 0)
-                player.setAnimation(jumpAnim);
-            else
-                player.setAnimation(fallAnim);
-        } else if (moveLeft || moveRight) {
-            player.setAnimation(runAnim);
-        } else {
-            player.setAnimation(idleAnim);
-        }
-
-        // Now update the sprites animation and position
-        player.update(elapsed);
-
-        // Keep player within the map boundaries (left edge)
-        if (player.getX() < 0)
-            player.setX(0);
-
-        // Keep player within the map boundaries (right edge)
-        if (player.getX() + player.getWidth() > tmap.getPixelWidth())
-            player.setX(tmap.getPixelWidth() - player.getWidth());
-
-        // Then check for any collisions that may have occurred
-        checkTileCollision(player, tmap);
-        
-        // Check for collisions with fruits
+        // ── FRUIT COLLECTION ──────────────────────────────────────
         ArrayList<Sprite> toRemove = new ArrayList<Sprite>();
         for (Sprite f : fruits) {
             f.update(elapsed);
-            // Only check collision if this fruit hasn't been collected yet
-        	if (!collectedFruits.contains(f) && boundingBoxCollision(player, f)) {
-        		// Create a new collect animation for THIS fruit only
-        		Animation cAnim = new Animation();
-        		cAnim.loadAnimationFromSheet("../assets/images/Items/Fruits/Collected.png", 6, 1, 60);
-        		cAnim.setLoop(false);
-        		f.setAnimation(cAnim);
-        		collectedFruits.add(f);
-        		total += 100; // Add score when collected
-        	}
-        	// Remove fruit when its non-looping collect animation finishes
-        	if (collectedFruits.contains(f) && f.getAnimation().hasLooped()) {
-        		toRemove.add(f);
-        	}
+            if (!collectedFruits.contains(f) && boundingBoxCollision(player, f)) {
+                Animation cAnim = new Animation();
+                cAnim.loadAnimationFromSheet("../assets/images/Items/Fruits/Collected.png", 6, 1, 60);
+                cAnim.setLoop(false);
+                f.setAnimation(cAnim);
+                collectedFruits.add(f);
+                total += 100;
+                // Particle burst + sound on collect
+                spawnFruitParticles(f.getX(), f.getY(), new Color(255, 180, 60));
+                playSound("../assets/audio/collect_fruit.wav");
+            }
+            if (collectedFruits.contains(f) && f.getAnimation().hasLooped()) {
+                toRemove.add(f);
+            }
         }
         fruits.removeAll(toRemove);
-        
-        // Check checkpoint
+
+        // ── POWER-UP COLLECTION (Strawberry = +1 life) ────────────
+        ArrayList<Sprite> powToRemove = new ArrayList<Sprite>();
+        for (Sprite s : powerups) {
+            s.update(elapsed);
+            if (!collectedPowerups.contains(s) && boundingBoxCollision(player, s)) {
+                collectedPowerups.add(s);
+                if (lives < 3) lives++;           // cap at 3
+                total += 50;
+                // Pink particle burst for strawberry
+                spawnFruitParticles(s.getX(), s.getY(), new Color(255, 80, 120));
+                playSound("../assets/audio/collect_fruit.wav");
+                powToRemove.add(s);
+            }
+        }
+        powerups.removeAll(powToRemove);
+
+        // ── UPDATE PARTICLES ──────────────────────────────────────
+        ArrayList<Particle> deadParticles = new ArrayList<Particle>();
+        for (Particle p : particles) {
+            if (!p.update(elapsed))
+                deadParticles.add(p);
+        }
+        particles.removeAll(deadParticles);
+
+        // ── CHECKPOINT ────────────────────────────────────────────
         if (checkpoint != null) {
-        	checkpoint.update(elapsed);
-        	if (boundingBoxCollision(player, checkpoint)) {
-        		// Reached the end of the level! (Transition will be added here later)
-        		System.out.println("Checkpoint reached! Loading next level.");
-        		loadLevel(currentLevel + 1);
-        		return; // exit update to prevent issues with partially updated state
-        	}
+            checkpoint.update(elapsed);
+            if (boundingBoxCollision(player, checkpoint)) {
+                playSound("../assets/audio/collect_fruit.wav");
+                loadLevel(currentLevel + 1);
+                return;
+            }
         }
 
-        // Update score only when moving
-        if (moveLeft || moveRight)
+        // Score ticks up while moving
+        if (player.isMoveLeft() || player.isMoveRight())
             total += elapsed;
     }
 
+    // ── KEY INPUT ─────────────────────────────────────────────────────────────
     /**
      * Override of the keyPressed event defined in GameCore to catch our
      * own events
@@ -401,18 +715,45 @@ public class Game extends GameCore {
     public void keyPressed(KeyEvent e) {
         int key = e.getKeyCode();
 
+        // Handle MENU state
+        if (gameState == STATE_MENU) {
+            if (key == KeyEvent.VK_ENTER) {
+                total = 0;
+                lives = 3;
+                gameState = STATE_PLAYING;
+                loadLevel(1);
+            }
+            return;
+        }
+
+        // Handle GAME OVER and WIN states
+        if (gameState == STATE_GAME_OVER || gameState == STATE_WIN) {
+            if (key == KeyEvent.VK_R) {
+                total = 0;
+                lives = 3;
+                gameState = STATE_PLAYING;
+                loadLevel(1);
+            } else if (key == KeyEvent.VK_Q) {
+                stop();
+            }
+            return;
+        }
+
+        // Normal playing controls
         switch (key) {
             case KeyEvent.VK_LEFT:
-                moveLeft = true;
+                player.setMoveLeft(true);
                 break;
             case KeyEvent.VK_RIGHT:
-                moveRight = true;
+                player.setMoveRight(true);
                 break;
             case KeyEvent.VK_SPACE:
-                jumping = true;
+                if (player.isGrounded()) playFilteredSound("../assets/audio/jump.wav");
+                player.setJumping(true);
                 break;
             case KeyEvent.VK_UP:
-                jumping = true;
+                if (player.isGrounded()) playFilteredSound("../assets/audio/jump.wav");
+                player.setJumping(true);
                 break;
             case KeyEvent.VK_ESCAPE:
                 stop();
@@ -432,143 +773,28 @@ public class Game extends GameCore {
      * @return true if a collision may have occurred, false if it has not.
      */
     public boolean boundingBoxCollision(Sprite s1, Sprite s2) {
-        // Get the bounding boxes of both sprites
-        float s1x = s1.getX();
-        float s1y = s1.getY();
-        float s1w = s1.getWidth();
-        float s1h = s1.getHeight();
-
-        float s2x = s2.getX();
-        float s2y = s2.getY();
-        float s2w = s2.getWidth();
-        float s2h = s2.getHeight();
-
-        // Check for overlap
-        return (s1x < s2x + s2w && s1x + s1w > s2x &&
-                s1y < s2y + s2h && s1y + s1h > s2y);
-    }
-
-    /**
-     * Check and handle collisions with a tile map for the
-     * given sprite 's'. Checks all four corners plus midpoints
-     * to determine proper collision response.
-     * 
-     * @param s    The Sprite to check collisions for
-     * @param tmap The tile map to check
-     */
-    public void checkTileCollision(Sprite s, TileMap tmap) {
-        // Empty out our current set of collided tiles
-        collidedTiles.clear();
-
-        float sx = s.getX();
-        float sy = s.getY();
-        float sw = s.getWidth();
-        float sh = s.getHeight();
-
-        float tileW = tmap.getTileWidth();
-        float tileH = tmap.getTileHeight();
-
-        // We assume grounded is false until proven otherwise
-        grounded = false;
-
-        // --- Bottom collision (landing on ground) ---
-        // Check bottom-left and bottom-right corners
-        int btileY = (int) ((sy + sh) / tileH);
-        int btileXL = (int) ((sx + 4) / tileW); // slight inset to avoid edge sticking
-        int btileXR = (int) ((sx + sw - 4) / tileW);
-
-        Tile blTile = tmap.getTile(btileXL, btileY);
-        Tile brTile = tmap.getTile(btileXR, btileY);
-
-        if ((blTile != null && blTile.getCharacter() != '.') ||
-                (brTile != null && brTile.getCharacter() != '.')) {
-            // Land on top of the tile
-            s.setY(btileY * tileH - sh);
-            s.setVelocityY(0);
-            grounded = true;
-            if (blTile != null && blTile.getCharacter() != '.')
-                collidedTiles.add(blTile);
-            if (brTile != null && brTile.getCharacter() != '.')
-                collidedTiles.add(brTile);
-        }
-
-        // --- Top collision (hitting ceiling) ---
-        int ttileY = (int) (sy / tileH);
-        int ttileXL = (int) ((sx + 4) / tileW);
-        int ttileXR = (int) ((sx + sw - 4) / tileW);
-
-        Tile tlTile = tmap.getTile(ttileXL, ttileY);
-        Tile trTile = tmap.getTile(ttileXR, ttileY);
-
-        if ((tlTile != null && tlTile.getCharacter() != '.') ||
-                (trTile != null && trTile.getCharacter() != '.')) {
-            // Push player down out of the ceiling
-            s.setY((ttileY + 1) * tileH);
-            s.setVelocityY(0);
-            if (tlTile != null && tlTile.getCharacter() != '.')
-                collidedTiles.add(tlTile);
-            if (trTile != null && trTile.getCharacter() != '.')
-                collidedTiles.add(trTile);
-        }
-
-        // --- Left collision (hitting wall on left side) ---
-        int ltileX = (int) (sx / tileW);
-        int ltileYT = (int) ((sy + 4) / tileH);
-        int ltileYB = (int) ((sy + sh - 4) / tileH);
-
-        Tile ltTile = tmap.getTile(ltileX, ltileYT);
-        Tile lbTile = tmap.getTile(ltileX, ltileYB);
-
-        if ((ltTile != null && ltTile.getCharacter() != '.') ||
-                (lbTile != null && lbTile.getCharacter() != '.')) {
-            // Push player right out of the wall
-            s.setX((ltileX + 1) * tileW);
-            s.setVelocityX(0);
-            if (ltTile != null && ltTile.getCharacter() != '.')
-                collidedTiles.add(ltTile);
-            if (lbTile != null && lbTile.getCharacter() != '.')
-                collidedTiles.add(lbTile);
-        }
-
-        // --- Right collision (hitting wall on right side) ---
-        int rtileX = (int) ((sx + sw) / tileW);
-        int rtileYT = (int) ((sy + 4) / tileH);
-        int rtileYB = (int) ((sy + sh - 4) / tileH);
-
-        Tile rtTile = tmap.getTile(rtileX, rtileYT);
-        Tile rbTile = tmap.getTile(rtileX, rtileYB);
-
-        if ((rtTile != null && rtTile.getCharacter() != '.') ||
-                (rbTile != null && rbTile.getCharacter() != '.')) {
-            // Push player left out of the wall
-            s.setX(rtileX * tileW - sw);
-            s.setVelocityX(0);
-            if (rtTile != null && rtTile.getCharacter() != '.')
-                collidedTiles.add(rtTile);
-            if (rbTile != null && rbTile.getCharacter() != '.')
-                collidedTiles.add(rbTile);
-        }
+        float s1x = s1.getX(), s1y = s1.getY(), s1w = s1.getWidth(), s1h = s1.getHeight();
+        float s2x = s2.getX(), s2y = s2.getY(), s2w = s2.getWidth(), s2h = s2.getHeight();
+        return (s1x < s2x + s2w && s1x + s1w > s2x && s1y < s2y + s2h && s1y + s1h > s2y);
     }
 
     public void keyReleased(KeyEvent e) {
-
         int key = e.getKeyCode();
-
         switch (key) {
             case KeyEvent.VK_ESCAPE:
                 stop();
                 break;
             case KeyEvent.VK_LEFT:
-                moveLeft = false;
+                player.setMoveLeft(false);
                 break;
             case KeyEvent.VK_RIGHT:
-                moveRight = false;
+                player.setMoveRight(false);
                 break;
             case KeyEvent.VK_SPACE:
-                jumping = false;
+                player.setJumping(false);
                 break;
             case KeyEvent.VK_UP:
-                jumping = false;
+                player.setJumping(false);
                 break;
             default:
                 break;
