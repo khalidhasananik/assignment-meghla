@@ -21,6 +21,14 @@ import game2D.*;
 @SuppressWarnings("serial")
 
 public class Game extends GameCore {
+    // Dynamic pathing block for Eclipse vs Command Line execution
+    public static String BASE_PATH = "";
+    static {
+        if (new java.io.File("../assets").exists()) {
+            BASE_PATH = "../";
+        }
+    }
+
     // Useful game constants
     static int screenWidth = 512;
     static int screenHeight = 384;
@@ -74,7 +82,7 @@ public class Game extends GameCore {
     // Scoring
     long total;
     int highScore = 0;
-    static final String SAVE_FILE = "../saves/highscore.txt";
+    static final String SAVE_FILE = BASE_PATH + "saves/highscore.txt";
 
     /**
      * The obligatory main method that creates
@@ -99,43 +107,43 @@ public class Game extends GameCore {
         setVisible(true);
 
         // Load per-level backgrounds
-        bgImages[0] = loadImage("../assets/images/Background/Blue.png");
-        bgImages[1] = loadImage("../assets/images/Background/Blue.png");   // level 1
-        bgImages[2] = loadImage("../assets/images/Background/Green.png");  // level 2
-        bgImages[3] = loadImage("../assets/images/Background/Purple.png"); // level 3
+        bgImages[0] = loadImage(BASE_PATH + "assets/images/Background/Blue.png");
+        bgImages[1] = loadImage(BASE_PATH + "assets/images/Background/Blue.png");   // level 1
+        bgImages[2] = loadImage(BASE_PATH + "assets/images/Background/Green.png");  // level 2
+        bgImages[3] = loadImage(BASE_PATH + "assets/images/Background/Purple.png"); // level 3
         bgImage = bgImages[1];
 
         // Load player animations from Pixel Adventure sprite sheets
         idleAnim = new Animation();
-        idleAnim.loadAnimationFromSheet("../assets/images/Main Characters/Ninja Frog/Idle (32x32).png", 11, 1, 60);
+        idleAnim.loadAnimationFromSheet(BASE_PATH + "assets/images/Main Characters/Ninja Frog/Idle (32x32).png", 11, 1, 60);
 
         runAnim = new Animation();
-        runAnim.loadAnimationFromSheet("../assets/images/Main Characters/Ninja Frog/Run (32x32).png", 12, 1, 60);
+        runAnim.loadAnimationFromSheet(BASE_PATH + "assets/images/Main Characters/Ninja Frog/Run (32x32).png", 12, 1, 60);
 
         jumpAnim = new Animation();
-        jumpAnim.loadAnimationFromSheet("../assets/images/Main Characters/Ninja Frog/Jump (32x32).png", 1, 1, 200);
+        jumpAnim.loadAnimationFromSheet(BASE_PATH + "assets/images/Main Characters/Ninja Frog/Jump (32x32).png", 1, 1, 200);
 
         fallAnim = new Animation();
-        fallAnim.loadAnimationFromSheet("../assets/images/Main Characters/Ninja Frog/Fall (32x32).png", 1, 1, 200);
+        fallAnim.loadAnimationFromSheet(BASE_PATH + "assets/images/Main Characters/Ninja Frog/Fall (32x32).png", 1, 1, 200);
 
         appleAnim = new Animation();
-        appleAnim.loadAnimationFromSheet("../assets/images/Items/Fruits/Apple.png", 17, 1, 60);
+        appleAnim.loadAnimationFromSheet(BASE_PATH + "assets/images/Items/Fruits/Apple.png", 17, 1, 60);
 
         collectAnim = new Animation();
-        collectAnim.loadAnimationFromSheet("../assets/images/Items/Fruits/Collected.png", 6, 1, 60);
+        collectAnim.loadAnimationFromSheet(BASE_PATH + "assets/images/Items/Fruits/Collected.png", 6, 1, 60);
         collectAnim.setLoop(false);
 
         flagAnim = new Animation();
         flagAnim.loadAnimationFromSheet(
-                "../assets/images/Items/Checkpoints/Checkpoint/Checkpoint (Flag Idle)(64x64).png", 10, 1, 100);
+                BASE_PATH + "assets/images/Items/Checkpoints/Checkpoint/Checkpoint (Flag Idle)(64x64).png", 10, 1, 100);
 
         // Enemy animation - use Pink Man as the patrol enemy
         enemyRunAnim = new Animation();
-        enemyRunAnim.loadAnimationFromSheet("../assets/images/Main Characters/Pink Man/Run (32x32).png", 12, 1, 60);
+        enemyRunAnim.loadAnimationFromSheet(BASE_PATH + "assets/images/Main Characters/Pink Man/Run (32x32).png", 12, 1, 60);
 
         // Strawberry power-up animation
         strawberryAnim = new Animation();
-        strawberryAnim.loadAnimationFromSheet("../assets/images/Items/Fruits/Strawberry.png", 17, 1, 60);
+        strawberryAnim.loadAnimationFromSheet(BASE_PATH + "assets/images/Items/Fruits/Strawberry.png", 17, 1, 60);
 
         // Initialise the player with the animations
         player = new Player(idleAnim, runAnim, jumpAnim, fallAnim);
@@ -151,7 +159,7 @@ public class Game extends GameCore {
 
         // Start background music (MIDI)
         try {
-            Sequence sequence = MidiSystem.getSequence(new File("../assets/audio/bgm.mid"));
+            Sequence sequence = MidiSystem.getSequence(new File(BASE_PATH + "assets/audio/bgm.mid"));
             Sequencer sequencer = MidiSystem.getSequencer();
             sequencer.open();
             sequencer.setSequence(sequence);
@@ -232,12 +240,11 @@ public class Game extends GameCore {
         bgImage = bgImages[Math.min(level, bgImages.length - 1)];
 
         String mapFile = "map" + level + ".txt";
-        if (!tmap.loadMap("../maps", mapFile)) {
+        if (!tmap.loadMap(BASE_PATH + "maps", mapFile)) {
             System.out.println("Could not load level " + level + ". Returning to Title or quitting.");
             stop();
             return;
         }
-        System.out.println(tmap);
         initialiseGame();
     }
 
@@ -271,7 +278,7 @@ public class Game extends GameCore {
                 if (ch == 'a') {
                     // Each fruit needs its OWN Animation to avoid shared state
                     Animation fruitAnim = new Animation();
-                    fruitAnim.loadAnimationFromSheet("../assets/images/Items/Fruits/Apple.png", 17, 1, 60);
+                    fruitAnim.loadAnimationFromSheet(BASE_PATH + "assets/images/Items/Fruits/Apple.png", 17, 1, 60);
                     Sprite apple = new Sprite(fruitAnim);
                     // Center the 32x32 fruit on the 16x16 tile
                     apple.setPosition(c * tmap.getTileWidth() - 8, r * tmap.getTileHeight() - 8);
@@ -280,7 +287,7 @@ public class Game extends GameCore {
                 } else if (ch == 's') {
                     // Strawberry power-up — grants +1 life
                     Animation sa = new Animation();
-                    sa.loadAnimationFromSheet("../assets/images/Items/Fruits/Strawberry.png", 17, 1, 60);
+                    sa.loadAnimationFromSheet(BASE_PATH + "assets/images/Items/Fruits/Strawberry.png", 17, 1, 60);
                     Sprite berry = new Sprite(sa);
                     berry.setPosition(c * tmap.getTileWidth() - 8, r * tmap.getTileHeight() - 8);
                     powerups.add(berry);
@@ -293,7 +300,7 @@ public class Game extends GameCore {
                 } else if (ch == 'e') {
                     // Create an enemy with its own animation instance
                     Animation ea = new Animation();
-                    ea.loadAnimationFromSheet("../assets/images/Main Characters/Pink Man/Run (32x32).png", 12, 1, 60);
+                    ea.loadAnimationFromSheet(BASE_PATH + "assets/images/Main Characters/Pink Man/Run (32x32).png", 12, 1, 60);
                     float ex = c * tmap.getTileWidth();
                     float ey = r * tmap.getTileHeight();
                     float pMin = Math.max(0, ex - 5 * tmap.getTileWidth());
@@ -340,10 +347,13 @@ public class Game extends GameCore {
 
             // Show high score on menu
             if (highScore > 0) {
-                g.setFont(new Font("Monospaced", Font.PLAIN, 13));
+                g.setFont(new Font("Monospaced", Font.BOLD, 16));
                 String hs = "Best: " + highScore;
                 int hsw = g.getFontMetrics().stringWidth(hs);
-                g.setColor(new Color(200, 200, 255));
+                // Draw drop shadow for visibility
+                g.setColor(Color.black);
+                g.drawString(hs, (screenWidth - hsw) / 2 + 2, screenHeight / 2 + 87);
+                g.setColor(Color.white);
                 g.drawString(hs, (screenWidth - hsw) / 2, screenHeight / 2 + 85);
             }
             return;
@@ -478,21 +488,23 @@ public class Game extends GameCore {
         }
 
         // ── HUD ──────────────────────────────────────────────────
+        int textX = getWidth() - 160;
+
         // Score  (white text + black drop shadow)
         g.setFont(new Font("Monospaced", Font.BOLD, 22));
         String msg = String.format("Score: %d", total / 100);
         g.setColor(Color.black);
-        g.drawString(msg, getWidth() - 138, 58);
+        g.drawString(msg, textX + 2, 58);
         g.setColor(Color.white);
-        g.drawString(msg, getWidth() - 140, 56);
+        g.drawString(msg, textX, 56);
 
         // High-score line beneath score
-        g.setFont(new Font("Monospaced", Font.PLAIN, 14));
+        g.setFont(new Font("Monospaced", Font.PLAIN, 16));
         String hsTxt = "Best: " + highScore;
         g.setColor(Color.black);
-        g.drawString(hsTxt, getWidth() - 118, 78);
-        g.setColor(new Color(200, 200, 255));
-        g.drawString(hsTxt, getWidth() - 120, 76);
+        g.drawString(hsTxt, textX + 2, 78);
+        g.setColor(Color.white);
+        g.drawString(hsTxt, textX, 76);
 
         // Lives (hearts)
         g.setFont(new Font("Monospaced", Font.BOLD, 22));
@@ -507,9 +519,9 @@ public class Game extends GameCore {
         g.setFont(new Font("Monospaced", Font.BOLD, 18));
         String lvlMsg = "Level " + currentLevel;
         g.setColor(Color.black);
-        g.drawString(lvlMsg, getWidth() - 138, 102);
+        g.drawString(lvlMsg, textX + 2, 102);
         g.setColor(new Color(255, 255, 150));
-        g.drawString(lvlMsg, getWidth() - 140, 100);
+        g.drawString(lvlMsg, textX, 100);
 
         if (debug) {
             tmap.drawBorder(g, xo, yo, Color.black);
@@ -620,14 +632,14 @@ public class Game extends GameCore {
                     deadEnemies.add(en);
                     total += 200;
                     player.bounce();
-                    playSound("../assets/audio/bounce.wav");
+                    playSound(BASE_PATH + "assets/audio/bounce.wav");
                 } else if (!playerHit) {
                     // Lateral hit — lose a life
                     lives--;
                     playerHit = true;
                     hitTimer = 0;
                     shakeTimer = SHAKE_DURATION; // trigger screen shake!
-                    playSound("../assets/audio/hit.wav");
+                    playSound(BASE_PATH + "assets/audio/hit.wav");
                     if (lives <= 0) {
                         int score = (int) (total / 100);
                         if (score > highScore) {
@@ -651,14 +663,14 @@ public class Game extends GameCore {
             f.update(elapsed);
             if (!collectedFruits.contains(f) && boundingBoxCollision(player, f)) {
                 Animation cAnim = new Animation();
-                cAnim.loadAnimationFromSheet("../assets/images/Items/Fruits/Collected.png", 6, 1, 60);
+                cAnim.loadAnimationFromSheet(BASE_PATH + "assets/images/Items/Fruits/Collected.png", 6, 1, 60);
                 cAnim.setLoop(false);
                 f.setAnimation(cAnim);
                 collectedFruits.add(f);
                 total += 100;
                 // Particle burst + sound on collect
                 spawnFruitParticles(f.getX(), f.getY(), new Color(255, 180, 60));
-                playSound("../assets/audio/collect_fruit.wav");
+                playSound(BASE_PATH + "assets/audio/collect_fruit.wav");
             }
             if (collectedFruits.contains(f) && f.getAnimation().hasLooped()) {
                 toRemove.add(f);
@@ -676,7 +688,7 @@ public class Game extends GameCore {
                 total += 50;
                 // Pink particle burst for strawberry
                 spawnFruitParticles(s.getX(), s.getY(), new Color(255, 80, 120));
-                playSound("../assets/audio/collect_fruit.wav");
+                playSound(BASE_PATH + "assets/audio/collect_fruit.wav");
                 powToRemove.add(s);
             }
         }
@@ -694,7 +706,7 @@ public class Game extends GameCore {
         if (checkpoint != null) {
             checkpoint.update(elapsed);
             if (boundingBoxCollision(player, checkpoint)) {
-                playSound("../assets/audio/collect_fruit.wav");
+                playSound(BASE_PATH + "assets/audio/collect_fruit.wav");
                 loadLevel(currentLevel + 1);
                 return;
             }
@@ -748,11 +760,11 @@ public class Game extends GameCore {
                 player.setMoveRight(true);
                 break;
             case KeyEvent.VK_SPACE:
-                if (player.isGrounded()) playFilteredSound("../assets/audio/jump.wav");
+                if (player.isGrounded()) playFilteredSound(BASE_PATH + "assets/audio/jump.wav");
                 player.setJumping(true);
                 break;
             case KeyEvent.VK_UP:
-                if (player.isGrounded()) playFilteredSound("../assets/audio/jump.wav");
+                if (player.isGrounded()) playFilteredSound(BASE_PATH + "assets/audio/jump.wav");
                 player.setJumping(true);
                 break;
             case KeyEvent.VK_ESCAPE:
