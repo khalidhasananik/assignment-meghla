@@ -16,7 +16,7 @@ import game2D.*;
 // to begin the process. You should also add code to the 'init'
 // method that will initialise event handlers etc. 
 
-// Student ID: Meghla
+// Student ID: 3366206
 
 @SuppressWarnings("serial")
 
@@ -303,8 +303,8 @@ public class Game extends GameCore {
                     ea.loadAnimationFromSheet(BASE_PATH + "assets/images/Main Characters/Pink Man/Run (32x32).png", 12, 1, 60);
                     float ex = c * tmap.getTileWidth();
                     float ey = r * tmap.getTileHeight();
-                    float pMin = Math.max(0, ex - 5 * tmap.getTileWidth());
-                    float pMax = Math.min(tmap.getPixelWidth(), ex + 5 * tmap.getTileWidth());
+                    float pMin = Math.max(0, ex - 10 * tmap.getTileWidth());
+                    float pMax = Math.min(tmap.getPixelWidth(), ex + 10 * tmap.getTileWidth());
 
                     Enemy enemy = new Enemy(ea, ex, ey, pMin, pMax);
                     enemies.add(enemy);

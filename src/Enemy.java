@@ -82,7 +82,10 @@ public class Enemy extends Sprite {
         if ((ltTile != null && ltTile.getCharacter() != '.') ||
                 (lbTile != null && lbTile.getCharacter() != '.')) {
             setX((ltileX + 1) * tileW);
-            setVelocityX(0);
+            // Wall hit — reverse direction
+            facingRight = true;
+            setVelocityX(0.08f);
+            setScale(1, 1);
         }
 
         // --- Right collision ---
@@ -96,7 +99,10 @@ public class Enemy extends Sprite {
         if ((rtTile != null && rtTile.getCharacter() != '.') ||
                 (rbTile != null && rbTile.getCharacter() != '.')) {
             setX(rtileX * tileW - sw);
-            setVelocityX(0);
+            // Wall hit — reverse direction
+            facingRight = false;
+            setVelocityX(-0.08f);
+            setScale(-1, 1);
         }
     }
 }
