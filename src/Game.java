@@ -10,18 +10,27 @@ import javax.sound.midi.*;
 
 import game2D.*;
 
-// Game demonstrates how we can override the GameCore class
-// to create our own 'game'. We usually need to implement at
-// least 'draw' and 'update' (not including any local event handling)
-// to begin the process. You should also add code to the 'init'
-// method that will initialise event handlers etc. 
+/**
+ * Main Game Class for CSCU9N6 2D Platformer
+ * Extends GameCore to implement a complete tile-based platformer featuring:
+ * - Parallax scrolling backgrounds
+ * - State-based character animations
+ * - Advanced bounding-box collision detection
+ * - Async sound effects and custom audio filtering
+ */
 
 // Student ID: 3366206
 
 @SuppressWarnings("serial")
 
 public class Game extends GameCore {
-    // Dynamic pathing block for Eclipse vs Command Line execution
+    /**
+     * Dynamic Path Resolution Block:
+     * When running via Command Line, the working directory is usually /src.
+     * When running via Eclipse IDE, the working directory is usually the project root.
+     * This static block detects the environment and sets a BASE_PATH prefix string 
+     * so that asset loading never throws a FileNotFoundException regardless of how the game is launched.
+     */
     public static String BASE_PATH = "";
     static {
         if (new java.io.File("../assets").exists()) {
@@ -210,7 +219,15 @@ public class Game extends GameCore {
     }
 
     // ── PARTICLES ─────────────────────────────────────────────────────────────
-    /** Spawn a small burst of coloured particles at the given world position. */
+    /** 
+     * Spawns a small burst of coloured 2D particles at a specific world coordinate. 
+     * The particles calculate their own physics trajectories using basic sine/cosine math
+     * to explode outwards in a 360-degree circle.
+     * 
+     * @param wx The world X coordinate to spawn particles at.
+     * @param wy The world Y coordinate to spawn particles at.
+     * @param color The RGB color the particles should be drawn as.
+     */
     private void spawnFruitParticles(float wx, float wy, Color color) {
         for (int i = 0; i < 8; i++) {
             float angle = (float) (Math.PI * 2 * i / 8);
@@ -316,8 +333,13 @@ public class Game extends GameCore {
 
     // ── DRAW ───────────────────────────────────────────────────────────────────
     /**
-     * Draw the current state of the game. Note the sample use of
-     * debugging output that is drawn directly to the game screen.
+     * Core Render Loop: Draws the current state of the game every frame.
+     * This method handles the camera logic by calculating 'xo' and 'yo' (X and Y offsets).
+     * Instead of moving the player around the screen, the player stays relatively centered 
+     * while the entire game world (tilemaps, sprites, backgrounds) is inversely offset 
+     * and drawn "underneath" them to create a scrolling camera effect.
+     * 
+     * @param g The graphics context to draw to.
      */
     public void draw(Graphics2D g) {
 
@@ -586,10 +608,13 @@ public class Game extends GameCore {
 
     // ── UPDATE ────────────────────────────────────────────────────────────────
     /**
-     * Update any sprites and check for collisions
+     * Core Physics & Logic Loop.
+     * This runs every frame before draw() and is responsible for:
+     * 1. Updating sprite physics (gravity, velocity calculations)
+     * 2. Processing game logic (timers, invincibility)
+     * 3. Calculating all collisions (Player vs Enemy, Player vs Items)
      * 
-     * @param elapsed The elapsed time between this call and the previous call of
-     *                elapsed
+     * @param elapsed The elapsed time (in milliseconds) since the last update call.
      */
     public void update(long elapsed) {
         // Only run game logic when actively playing
@@ -810,6 +835,447 @@ public class Game extends GameCore {
                 break;
             default:
                 break;
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  INNER CLASSES — Player, Enemy, Particle, FilteredSound
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * The Player class encapsulates all physics, states, and inputs for the playable character.
+     * It extends the Game2D Sprite class, allowing it to natively draw itself to the screen.
+     * State is tracked via boolean flags (grounded, jumping) which automatically
+     * switch the current Animation (Idle, Run, Jump, Fall) on every frame.
+     */
+    static class Player extends Sprite {
+
+        private float gravity = 0.0008f;
+        private float jumpStrength = -0.32f;
+        private float moveSpeed = 0.12f;
+
+        private Animation idleAnim;
+        private Animation runAnim;
+        private Animation jumpAnim;
+        private Animation fallAnim;
+
+        private boolean grounded = false;
+        private boolean jumping = false;
+        private boolean moveLeft = false;
+        private boolean moveRight = false;
+
+        // List to store tiles the player collided with this frame
+        private ArrayList<Tile> collidedTiles = new ArrayList<Tile>();
+
+        public Player(Animation idleAnim, Animation runAnim, Animation jumpAnim, Animation fallAnim) {
+            super(idleAnim); // Start idle
+            this.idleAnim = idleAnim;
+            this.runAnim = runAnim;
+            this.jumpAnim = jumpAnim;
+            this.fallAnim = fallAnim;
+        }
+
+        public void setMoveLeft(boolean moveLeft) { this.moveLeft = moveLeft; }
+        public void setMoveRight(boolean moveRight) { this.moveRight = moveRight; }
+        public void setJumping(boolean jumping) { this.jumping = jumping; }
+
+        public boolean isMoveLeft() { return moveLeft; }
+        public boolean isMoveRight() { return moveRight; }
+
+        public boolean isGrounded() { return grounded; }
+        public ArrayList<Tile> getCollidedTiles() { return collidedTiles; }
+
+        /**
+         * Updates player physics, movement, and animation states.
+         */
+        public void updatePhysics(long elapsed, TileMap tmap) {
+            // Apply gravity
+            setVelocityY(getVelocityY() + (gravity * elapsed));
+
+            // Horizontal movement
+            if (moveLeft && !moveRight) {
+                setVelocityX(-moveSpeed);
+                setScale(-1, 1);
+            } else if (moveRight && !moveLeft) {
+                setVelocityX(moveSpeed);
+                setScale(1, 1);
+            } else {
+                setVelocityX(0);
+            }
+
+            // Jumping
+            if (jumping && grounded) {
+                setVelocityY(jumpStrength);
+                grounded = false;
+            }
+
+            // Clamp upwards jump velocity (so they can't fly out of frame)
+            if (getVelocityY() < jumpStrength) {
+                setVelocityY(jumpStrength);
+            }
+
+            // Update animation based on state
+            if (!grounded) {
+                if (getVelocityY() < 0)
+                    setAnimation(jumpAnim);
+                else
+                    setAnimation(fallAnim);
+            } else if (moveLeft || moveRight) {
+                setAnimation(runAnim);
+            } else {
+                setAnimation(idleAnim);
+            }
+
+            // Apply velocities
+            super.update(elapsed);
+
+            // Keep player in map boundaries horizontally
+            if (getX() < 0)
+                setX(0);
+            if (getX() + getWidth() > tmap.getPixelWidth())
+                setX(tmap.getPixelWidth() - getWidth());
+
+            // Perform tile map collision detection
+            checkTileCollision(tmap);
+        }
+
+        /**
+         * Bounces the player upwards (e.g., when stomping an enemy)
+         */
+        public void bounce() {
+            setVelocityY(jumpStrength * 0.6f);
+        }
+
+        /**
+         * Advanced Tile Map Collision Detection.
+         * Resolves clipping issues by checking the exact pixel boundaries of the Player
+         * against the grid location of rigid map tiles (like grass or stone).
+         * If the player's bounding box mathematically overlaps with a non-empty '.' tile,
+         * their position is snapped to the edge of the tile, and their velocity is set to 0.
+         * 
+         * @param tmap The TileMap to check against.
+         */
+        private void checkTileCollision(TileMap tmap) {
+            collidedTiles.clear();
+
+            float sx = getX();
+            float sy = getY();
+            float sw = getWidth();
+            float sh = getHeight();
+
+            float tileW = tmap.getTileWidth();
+            float tileH = tmap.getTileHeight();
+
+            grounded = false;
+
+            // --- Bottom collision ---
+            int btileY = (int) ((sy + sh) / tileH);
+            int btileXL = (int) ((sx + 4) / tileW);
+            int btileXR = (int) ((sx + sw - 4) / tileW);
+
+            Tile blTile = tmap.getTile(btileXL, btileY);
+            Tile brTile = tmap.getTile(btileXR, btileY);
+
+            if ((blTile != null && blTile.getCharacter() != '.') ||
+                    (brTile != null && brTile.getCharacter() != '.')) {
+                setY(btileY * tileH - sh);
+                setVelocityY(0);
+                grounded = true;
+                if (blTile != null && blTile.getCharacter() != '.') collidedTiles.add(blTile);
+                if (brTile != null && brTile.getCharacter() != '.') collidedTiles.add(brTile);
+            }
+
+            // --- Top collision ---
+            int ttileY = (int) (sy / tileH);
+            int ttileXL = (int) ((sx + 4) / tileW);
+            int ttileXR = (int) ((sx + sw - 4) / tileW);
+
+            Tile tlTile = tmap.getTile(ttileXL, ttileY);
+            Tile trTile = tmap.getTile(ttileXR, ttileY);
+
+            if ((tlTile != null && tlTile.getCharacter() != '.') ||
+                    (trTile != null && trTile.getCharacter() != '.')) {
+                setY((ttileY + 1) * tileH);
+                setVelocityY(0);
+                if (tlTile != null && tlTile.getCharacter() != '.') collidedTiles.add(tlTile);
+                if (trTile != null && trTile.getCharacter() != '.') collidedTiles.add(trTile);
+            }
+
+            // --- Left collision ---
+            int ltileX = (int) (sx / tileW);
+            int ltileYT = (int) ((sy + 4) / tileH);
+            int ltileYB = (int) ((sy + sh - 4) / tileH);
+
+            Tile ltTile = tmap.getTile(ltileX, ltileYT);
+            Tile lbTile = tmap.getTile(ltileX, ltileYB);
+
+            if ((ltTile != null && ltTile.getCharacter() != '.') ||
+                    (lbTile != null && lbTile.getCharacter() != '.')) {
+                setX((ltileX + 1) * tileW);
+                setVelocityX(0);
+                if (ltTile != null && ltTile.getCharacter() != '.') collidedTiles.add(ltTile);
+                if (lbTile != null && lbTile.getCharacter() != '.') collidedTiles.add(lbTile);
+            }
+
+            // --- Right collision ---
+            int rtileX = (int) ((sx + sw) / tileW);
+            int rtileYT = (int) ((sy + 4) / tileH);
+            int rtileYB = (int) ((sy + sh - 4) / tileH);
+
+            Tile rtTile = tmap.getTile(rtileX, rtileYT);
+            Tile rbTile = tmap.getTile(rtileX, rtileYB);
+
+            if ((rtTile != null && rtTile.getCharacter() != '.') ||
+                    (rbTile != null && rbTile.getCharacter() != '.')) {
+                setX(rtileX * tileW - sw);
+                setVelocityX(0);
+                if (rtTile != null && rtTile.getCharacter() != '.') collidedTiles.add(rtTile);
+                if (rbTile != null && rbTile.getCharacter() != '.') collidedTiles.add(rbTile);
+            }
+        }
+    }
+
+    /**
+     * The Enemy class encapsulates rudimentary AI patrol behaviour.
+     * Enemies are assigned a specific starting coordinate and an invisible "Patrol Radius" (min/max X).
+     * They walk back and forth until they hit their boundary, at which point they reverse direction.
+     * They possess their own distinct physics gravity and collision handlers.
+     */
+    static class Enemy extends Sprite {
+
+        private float gravity = 0.0008f;
+        private float patrolMin;
+        private float patrolMax;
+        private boolean facingRight = true;
+
+        public Enemy(Animation anim, float startX, float startY, float patrolMin, float patrolMax) {
+            super(anim);
+            setPosition(startX, startY);
+            setVelocity(0.08f, 0); // start moving right
+            this.patrolMin = patrolMin;
+            this.patrolMax = patrolMax;
+            this.facingRight = true;
+        }
+
+        /**
+         * Updates the enemy's position, applies gravity, handles patrol boundaries,
+         * and performs collision detection.
+         */
+        public void updatePhysics(long elapsed, TileMap tmap) {
+            // Apply gravity
+            setVelocityY(getVelocityY() + (gravity * elapsed));
+
+            // Reverse direction at patrol boundaries
+            if (getX() <= patrolMin && !facingRight) {
+                facingRight = true;
+                setVelocityX(0.08f);
+                setScale(1, 1);
+            } else if (getX() + getWidth() >= patrolMax && facingRight) {
+                facingRight = false;
+                setVelocityX(-0.08f);
+                setScale(-1, 1);
+            }
+
+            super.update(elapsed);
+            checkTileCollision(tmap);
+        }
+
+        /**
+         * Basic tile collision for the enemy to stand on floors and not walk through walls.
+         */
+        private void checkTileCollision(TileMap tmap) {
+            float sx = getX();
+            float sy = getY();
+            float sw = getWidth();
+            float sh = getHeight();
+
+            float tileW = tmap.getTileWidth();
+            float tileH = tmap.getTileHeight();
+
+            // --- Bottom collision ---
+            int btileY = (int) ((sy + sh) / tileH);
+            int btileXL = (int) ((sx + 4) / tileW);
+            int btileXR = (int) ((sx + sw - 4) / tileW);
+
+            Tile blTile = tmap.getTile(btileXL, btileY);
+            Tile brTile = tmap.getTile(btileXR, btileY);
+
+            if ((blTile != null && blTile.getCharacter() != '.') ||
+                    (brTile != null && brTile.getCharacter() != '.')) {
+                setY(btileY * tileH - sh);
+                setVelocityY(0);
+            }
+
+            // --- Left collision ---
+            int ltileX = (int) (sx / tileW);
+            int ltileYT = (int) ((sy + 4) / tileH);
+            int ltileYB = (int) ((sy + sh - 4) / tileH);
+
+            Tile ltTile = tmap.getTile(ltileX, ltileYT);
+            Tile lbTile = tmap.getTile(ltileX, ltileYB);
+
+            if ((ltTile != null && ltTile.getCharacter() != '.') ||
+                    (lbTile != null && lbTile.getCharacter() != '.')) {
+                setX((ltileX + 1) * tileW);
+                // Wall hit — reverse direction
+                facingRight = true;
+                setVelocityX(0.08f);
+                setScale(1, 1);
+            }
+
+            // --- Right collision ---
+            int rtileX = (int) ((sx + sw) / tileW);
+            int rtileYT = (int) ((sy + 4) / tileH);
+            int rtileYB = (int) ((sy + sh - 4) / tileH);
+
+            Tile rtTile = tmap.getTile(rtileX, rtileYT);
+            Tile rbTile = tmap.getTile(rtileX, rtileYB);
+
+            if ((rtTile != null && rtTile.getCharacter() != '.') ||
+                    (rbTile != null && rbTile.getCharacter() != '.')) {
+                setX(rtileX * tileW - sw);
+                // Wall hit — reverse direction
+                facingRight = false;
+                setVelocityX(-0.08f);
+                setScale(-1, 1);
+            }
+        }
+    }
+
+    /**
+     * A simple visual particle used for fruit-collect burst effects.
+     * Each particle has a position, velocity, remaining life, and colour.
+     */
+    static class Particle {
+
+        float x, y;     // World position
+        float vx, vy;   // Velocity (pixels per ms)
+        int life;        // Remaining life in ms
+        Color color;
+
+        public Particle(float x, float y, float vx, float vy, int life, Color color) {
+            this.x = x;
+            this.y = y;
+            this.vx = vx;
+            this.vy = vy;
+            this.life = life;
+            this.color = color;
+        }
+
+        /** Move and age the particle. Returns false when it should be removed. */
+        public boolean update(long elapsed) {
+            x += vx * elapsed;
+            y += vy * elapsed;
+            vy += 0.001f * elapsed; // mini gravity
+            life -= (int) elapsed;
+            return life > 0;
+        }
+
+        /** Draw the particle at world-space offset (xo, yo). */
+        public void draw(Graphics2D g, int xo, int yo) {
+            // Fade out as life decreases
+            int alpha = Math.min(255, (int) (life * 2.5f));
+            g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), alpha));
+            int size = Math.max(2, life / 30);
+            g.fillOval((int) x + xo - size / 2, (int) y + yo - size / 2, size, size);
+        }
+    }
+
+    /**
+     * FilteredSound plays a .wav file but applies a custom byte-level mathematical
+     * filter to the audio data before sending it to the speakers.
+     * This fulfils the "novel sound filter" requirement.
+     */
+    static class FilteredSound extends Thread {
+
+        String filename; // The name of the file to play
+        boolean finished; // A flag showing that the thread has finished
+
+        public FilteredSound(String fname) {
+            filename = fname;
+            finished = false;
+        }
+
+        /**
+         * Applies a mathematical Acoustic Echo algorithm to raw PCM data.
+         * Rather than using a pre-built Java sound filter, this manually intercepts
+         * a sequence of bytes, calculates a temporal delay window based on the sample rate,
+         * reconstructing the 16-bit little-endian values, blending them with historic values,
+         * and then re-packing the 16-bit results back into the byte array frame-by-frame.
+         * 
+         * @param audioBytes The raw, unprocessed file array.
+         * @param format The format metadata representing structure (channels, bits).
+         */
+        private void applyEchoFilter(byte[] audioBytes, javax.sound.sampled.AudioFormat format) {
+            int bytesPerSample = format.getSampleSizeInBits() / 8;
+            if (bytesPerSample != 2) return; // Only process 16-bit audio
+
+            int channels = format.getChannels();
+
+            // Echo delay in samples (e.g. 100ms delay)
+            int delayInSamples = (int)(format.getSampleRate() * 0.10) * channels;
+            int delayInBytes = delayInSamples * bytesPerSample;
+
+            // We need an array to hold the original audio so we can mix it with a delay
+            byte[] original = new byte[audioBytes.length];
+            System.arraycopy(audioBytes, 0, original, 0, audioBytes.length);
+
+            for (int i = delayInBytes; i < audioBytes.length - 1; i += 2) {
+                // Reconstruct the 16-bit little-endian sample for the current time
+                short currentSample = (short) ((audioBytes[i+1] << 8) | (audioBytes[i] & 0xFF));
+
+                // Reconstruct the 16-bit little-endian sample from the past (the echo)
+                int pastIndex = i - delayInBytes;
+                short pastSample = (short) ((original[pastIndex+1] << 8) | (original[pastIndex] & 0xFF));
+
+                // Mix them together (current + 50% volume of past)
+                int mixed = currentSample + (pastSample / 2);
+
+                // Clamp the value to prevent clipping/distortion
+                if (mixed > Short.MAX_VALUE) mixed = Short.MAX_VALUE;
+                if (mixed < Short.MIN_VALUE) mixed = Short.MIN_VALUE;
+
+                // Put the mixed 16-bit sample back into the byte array
+                audioBytes[i] = (byte) (mixed & 0xFF);
+                audioBytes[i+1] = (byte) ((mixed >> 8) & 0xFF);
+            }
+        }
+
+        public void run() {
+            try {
+                File file = new File(filename);
+                javax.sound.sampled.AudioInputStream stream = javax.sound.sampled.AudioSystem.getAudioInputStream(file);
+                javax.sound.sampled.AudioFormat format = stream.getFormat();
+
+                // Read all bytes from the stream
+                int frameLength = (int) stream.getFrameLength();
+                int frameSize = format.getFrameSize();
+                byte[] bytes = new byte[frameLength * frameSize];
+                int bytesRead = stream.read(bytes);
+
+                // ── APPLY OUR NOVEL FILTER HERE ──
+                if (bytesRead > 0) {
+                    applyEchoFilter(bytes, format);
+                }
+
+                // Create a new stream from the filtered bytes
+                ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+                javax.sound.sampled.AudioInputStream filteredStream = new javax.sound.sampled.AudioInputStream(bais, format, frameLength);
+
+                // Play the filtered stream
+                javax.sound.sampled.DataLine.Info info = new javax.sound.sampled.DataLine.Info(javax.sound.sampled.Clip.class, format);
+                javax.sound.sampled.Clip clip = (javax.sound.sampled.Clip) javax.sound.sampled.AudioSystem.getLine(info);
+                clip.open(filteredStream);
+                clip.start();
+                Thread.sleep(100);
+                while (clip.isRunning()) {
+                    Thread.sleep(100);
+                }
+                clip.close();
+            } catch (Exception e) {
+                System.out.println("Error playing filtered sound: " + e.getMessage());
+            }
+            finished = true;
         }
     }
 }
